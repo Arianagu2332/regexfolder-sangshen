@@ -7,7 +7,7 @@
  */
 
 const EXTENSION_ID = 'regex-group-manager';
-const VERSION = 1;
+const VERSION = 2;
 const CATEGORIES = ['global', 'preset', 'local'];
 const CATEGORY_TITLES = {
     global: ['全局正则脚本', '全局正则'],
@@ -176,9 +176,24 @@ function rowSignature(row) {
     return textOf(clone);
 }
 
-function rowKey(row, category, index) {
-    const stable = row.dataset?.id || row.dataset?.regexId || row.getAttribute?.('data-uid');
-    return `${category}:${stable || `${hash(rowSignature(row))}:${index}`}`;
+function rowKey(row, category) {
+    const stable = row.dataset?.id
+        || row.dataset?.regexId
+        || row.getAttribute?.('data-uid')
+        || row.id;
+
+    // 宿主重绘或切换聊天时，正则行的列表序号可能改变；不能把 index 放进键里。
+    if (stable) return `${category}:${stable}`;
+    return `${category}:signature:${hash(rowSignature(row))}`;
+}
+
+function findLegacyAssignment(state, category, row, usedLegacyKeys) {
+    const prefix = `${category}:${hash(rowSignature(row))}:`;
+    const legacyKey = Object.keys(state.assignments)
+        .find(key => key.startsWith(prefix) && !usedLegacyKeys.has(key));
+    if (!legacyKey) return null;
+    usedLegacyKeys.add(legacyKey);
+    return { key: legacyKey, assignment: state.assignments[legacyKey] };
 }
 
 function getNativeToggle(row) {
@@ -245,7 +260,7 @@ function ensureStyles() {
     document.head.appendChild(style);
 }
 
-function addRowTools(row, category, key, groups, state) {
+function addRowTools(row, category, key, groups, state, assignment = state.assignments[key]) {
     let tools = row.querySelector(':scope > .rgs-row-tools');
     if (!tools) {
         tools = document.createElement('span');
@@ -266,7 +281,7 @@ function addRowTools(row, category, key, groups, state) {
         option.textContent = `📁 ${group.name}`;
         select.appendChild(option);
     }
-    select.value = state.assignments[key]?.groupId || '';
+    select.value = assignment?.groupId || '';
     select.addEventListener('change', () => {
         if (select.value) state.assignments[key] = { category, groupId: select.value };
         else delete state.assignments[key];
@@ -295,15 +310,28 @@ function renderSection(category, heading, state) {
     }
 
     const groups = state.groups[category] || [];
-    const rowByKey = new Map(rows.map((row, index) => [rowKey(row, category, index), row]));
+    const rowEntries = rows.map(row => ({ key: rowKey(row, category), row }));
     const grouped = new Map(groups.map(group => [group.id, []]));
     const ungrouped = [];
+    const usedLegacyKeys = new Set();
+    let migratedLegacyAssignment = false;
 
-    for (const [key, row] of rowByKey) {
-        const assignment = state.assignments[key];
+    for (const { key, row } of rowEntries) {
+        let assignment = state.assignments[key];
+        if (!assignment) {
+            const legacy = findLegacyAssignment(state, category, row, usedLegacyKeys);
+            if (legacy) {
+                assignment = legacy.assignment;
+                state.assignments[key] = assignment;
+                delete state.assignments[legacy.key];
+                migratedLegacyAssignment = true;
+            }
+        }
         if (assignment?.category === category && grouped.has(assignment.groupId)) grouped.get(assignment.groupId).push([key, row]);
         else ungrouped.push([key, row]);
     }
+
+    if (migratedLegacyAssignment) writeState(state);
 
     const groupEntries = [
         ...groups.map(group => [group, grouped.get(group.id) || []]),
@@ -355,7 +383,7 @@ function renderSection(category, heading, state) {
         const items = document.createElement('div');
         items.className = 'rgs-group-items';
         for (const [key, row] of entries) {
-            addRowTools(row, category, key, groups, state);
+            addRowTools(row, category, key, groups, state, state.assignments[key]);
             items.appendChild(row);
         }
         if (!entries.length) {
@@ -483,4 +511,3 @@ function init() {
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
 else init();
-
