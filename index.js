@@ -7,7 +7,7 @@
  */
 
 const EXTENSION_ID = 'regex-group-manager';
-const VERSION = 2;
+const VERSION = 3;
 const CATEGORIES = ['global', 'preset', 'local'];
 const CATEGORY_TITLES = {
     global: ['全局正则脚本', '全局正则'],
@@ -197,17 +197,23 @@ function findLegacyAssignment(state, category, row, usedLegacyKeys) {
 }
 
 function getNativeToggle(row) {
+    const disabledCheckbox = row.querySelector('input.disable_regex');
+    if (disabledCheckbox && !disabledCheckbox.closest('.rgs-row-tools')) return disabledCheckbox;
+
     const controls = [...row.querySelectorAll('button,input,[role="button"]')]
         .filter(control => !control.closest('.rgs-row-tools'));
-    const checkbox = controls.find(control => control.matches('input[type="checkbox"]'));
+    const checkbox = controls.find(control => control.matches(
+        'input[type="checkbox"]:not(.regex_bulk_checkbox):not([name="regex_expand"])',
+    ));
     if (checkbox) return checkbox;
     return controls.find(control => /toggle|enable|disable|启用|禁用|开关/i.test(
-        `${control.title} ${control.ariaLabel} ${control.className} ${control.dataset?.action || ''}`,
+        `${control.title} ${control.ariaLabel} ${control.className} ${control.dataset?.action || ""}`,
     )) || null;
 }
 
 function readEnabled(control) {
     if (!control) return null;
+    if (control.matches?.('input.disable_regex')) return !Boolean(control.checked);
     if (control.matches?.('input[type="checkbox"]')) return Boolean(control.checked);
     if (control.hasAttribute?.('aria-pressed')) return control.getAttribute('aria-pressed') === 'true';
     const descriptor = `${control.className} ${control.title} ${control.ariaLabel}`;
@@ -216,12 +222,54 @@ function readEnabled(control) {
     return null;
 }
 
+function dispatchNativeInput(control) {
+    control.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function setEnabled(row, enabled) {
     const control = getNativeToggle(row);
     if (!control) return false;
+
+    if (control.matches?.('input.disable_regex')) {
+        const shouldBeDisabled = !enabled;
+        if (control.checked === shouldBeDisabled) return true;
+        control.checked = shouldBeDisabled;
+        dispatchNativeInput(control);
+        return true;
+    }
+
+    if (control.matches?.('input[type="checkbox"]')) {
+        if (control.checked === enabled) return true;
+        control.checked = enabled;
+        dispatchNativeInput(control);
+        return true;
+    }
+
     const current = readEnabled(control);
     if (current === null || current !== enabled) control.click();
     return true;
+}
+
+function createSwitch(checked, title, handler) {
+    const label = document.createElement('label');
+    label.className = 'rgs-switch';
+    label.title = title;
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = Boolean(checked);
+    input.setAttribute('aria-label', title);
+    input.addEventListener('click', event => event.stopPropagation());
+    input.addEventListener('change', event => {
+        event.stopPropagation();
+        handler(Boolean(input.checked));
+    });
+
+    const track = document.createElement('span');
+    track.className = 'rgs-switch-track';
+    track.setAttribute('aria-hidden', 'true');
+    label.append(input, track);
+    return label;
 }
 
 function createButton(label, title, handler) {
@@ -245,6 +293,13 @@ function ensureStyles() {
     style.textContent = `
       .rgs-controls { display:flex; align-items:center; gap:.35rem; margin:.25rem 0 .4rem; flex-wrap:wrap; }
       .rgs-controls .rgs-button, .rgs-group-header .rgs-button { min-width:2rem; padding:.15rem .4rem; }
+      .rgs-switch { display:inline-flex; align-items:center; position:relative; cursor:pointer; margin:0 .15rem; }
+      .rgs-switch input { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+      .rgs-switch-track { position:relative; display:inline-block; width:2.2rem; height:1.2rem; border-radius:999px; background:#999; transition:background .15s ease; }
+      .rgs-switch-track::after { content:""; position:absolute; top:.15rem; left:.15rem; width:.9rem; height:.9rem; border-radius:50%; background:#fff; box-shadow:0 1px 2px #0006; transition:transform .15s ease; }
+      .rgs-switch input:checked + .rgs-switch-track { background:#3b82f6; }
+      .rgs-switch input:checked + .rgs-switch-track::after { transform:translateX(1rem); }
+      .rgs-switch input:focus-visible + .rgs-switch-track { outline:2px solid currentColor; outline-offset:2px; }
       .rgs-section-hidden .rgs-managed-list { display:none !important; }
       .rgs-section-hidden .rgs-controls { opacity:.85; }
       .rgs-managed-list { display:flex; flex-direction:column; gap:.2rem; }
@@ -278,7 +333,7 @@ function addRowTools(row, category, key, groups, state, assignment = state.assig
     for (const group of groups) {
         const option = document.createElement('option');
         option.value = group.id;
-        option.textContent = `📁 ${group.name}`;
+        option.textContent = `◆ ${group.name}`;
         select.appendChild(option);
     }
     select.value = assignment?.groupId || '';
@@ -348,7 +403,7 @@ function renderSection(category, heading, state) {
         header.className = 'rgs-group-header';
         const title = document.createElement('span');
         title.className = 'rgs-group-title';
-        title.textContent = `📁 ${group.name} (${entries.length})`;
+        title.textContent = `◆ ${group.name} (${entries.length})`;
         header.appendChild(title);
 
         if (group.id) {
@@ -357,10 +412,10 @@ function renderSection(category, heading, state) {
                 writeState(state);
                 scheduleRefresh();
             }));
-            header.appendChild(createButton(allEnabled(entries.map(([, row]) => row)) ? '关' : '开', '一键切换此文件夹中的正则', () => {
-                const target = !allEnabled(entries.map(([, row]) => row));
-                entries.forEach(([, row]) => setEnabled(row, target));
-                scheduleRefresh();
+            const groupRows = entries.map(([, row]) => row);
+            header.appendChild(createSwitch(allEnabled(groupRows), '一键切换此文件夹中的正则', enabled => {
+                groupRows.forEach(row => setEnabled(row, enabled));
+                setTimeout(scheduleRefresh, 100);
             }));
             header.appendChild(createButton('改名', '重命名文件夹', () => {
                 const name = prompt('请输入新的文件夹名称', group.name);
