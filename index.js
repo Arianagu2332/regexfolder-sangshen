@@ -14,6 +14,11 @@ const CATEGORY_TITLES = {
     preset: ['预设正则脚本', '预设正则'],
     local: ['局部正则脚本', '局部正则'],
 };
+const SECTION_ROOT_IDS = {
+    global: 'saved_regex_scripts',
+    preset: 'saved_preset_scripts',
+    local: 'saved_scoped_scripts',
+};
 
 const runtime = {
     sections: new Map(),
@@ -95,13 +100,18 @@ function matchesTitle(text, titles) {
 }
 
 function findHeading(category) {
-    const nodes = document.querySelectorAll('h1,h2,h3,h4,h5,h6,legend,summary,button,div,span,label');
+    const titles = CATEGORY_TITLES[category];
+    const candidates = [];
+    const nodes = document.querySelectorAll('h1,h2,h3,h4,h5,h6,legend,summary,div,span,label,p');
     for (const node of nodes) {
         if (node.closest('.rgs-controls,.rgs-managed-list,.rgs-group')) continue;
+        if (node.matches('button,[role="button"],.menu_button,[id^="open_"]')) continue;
         const text = textOf(node);
-        if (text.length <= 80 && matchesTitle(text, CATEGORY_TITLES[category])) return node;
+        if (text.length > 80) continue;
+        if (titles.some(title => text === title)) return node;
+        if (titles.some(title => text.startsWith(`${title}：`) || text.startsWith(`${title}:`))) candidates.push(node);
     }
-    return null;
+    return candidates[0] || null;
 }
 
 function walkParents(node, limit = 8) {
@@ -148,7 +158,9 @@ function discoverRows(sectionRoot, heading) {
     return candidates;
 }
 
-function findSectionRoot(heading) {
+function findSectionRoot(category, heading) {
+    const knownRoot = document.getElementById(SECTION_ROOT_IDS[category]);
+    if (knownRoot) return knownRoot;
     const headingText = textOf(heading);
     for (const parent of walkParents(heading)) {
         if (parent.querySelectorAll('button,input,[role="button"]').length >= 2 && textOf(parent).includes(headingText)) {
@@ -218,7 +230,7 @@ function ensureStyles() {
     style.textContent = `
       .rgs-controls { display:flex; align-items:center; gap:.35rem; margin:.25rem 0 .4rem; flex-wrap:wrap; }
       .rgs-controls .rgs-button, .rgs-group-header .rgs-button { min-width:2rem; padding:.15rem .4rem; }
-      .rgs-section-hidden > .rgs-managed-list { display:none !important; }
+      .rgs-section-hidden .rgs-managed-list { display:none !important; }
       .rgs-section-hidden .rgs-controls { opacity:.85; }
       .rgs-managed-list { display:flex; flex-direction:column; gap:.2rem; }
       .rgs-group { border:1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius:.35rem; margin:.25rem 0; overflow:hidden; }
@@ -270,7 +282,7 @@ function allEnabled(rows) {
 }
 
 function renderSection(category, heading, state) {
-    const sectionRoot = findSectionRoot(heading);
+    const sectionRoot = findSectionRoot(category, heading);
     const rows = discoverRows(sectionRoot, heading);
     if (!rows.length) return null;
 
@@ -471,5 +483,4 @@ function init() {
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
 else init();
-
 
